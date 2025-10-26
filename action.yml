@@ -10,6 +10,9 @@ inputs:
   forge_api_token:
     description: 'Laravel Forge API key'
     required: true
+  forge_organization:
+    description: 'Laravel Forge organization slug'
+    required: true
   forge_server_id:
     description: 'Laravel Forge server ID'
     required: true
