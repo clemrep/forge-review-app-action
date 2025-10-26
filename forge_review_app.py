@@ -83,13 +83,20 @@ class ForgeAPI:
             return response.json()
 
         except requests.exceptions.HTTPError as e:
+            # CORRECTION : Gérer le 404 comme un 'None' (ressource non trouvée/prête)
+            # Ne pas quitter le script, laisser la fonction appelante gérer cela.
+            if e.response.status_code == 404:
+                print(f"Warning: 404 Not Found for {method} {url}")
+                return None # <--- NE PAS QUITTER, RETOURNER NONE
+                
+            # Pour toutes les autres erreurs HTTP (500, 401, 403, etc.), imprimer et quitter.
             print(f"HTTP Error: {e.response.status_code} for {method} {url}")
             if e.response.text:
                 print(f"Response: {e.response.text}")
-            sys.exit(1)
+            sys.exit(1) # <--- Quitter pour les erreurs inattendues
         except requests.exceptions.RequestException as e:
             print(f"Request Error: {e}")
-            sys.exit(1)
+            sys.exit(1) # <--- Quitter pour les erreurs de connexion
 
     def list_sites(self) -> list:
         return self._request("GET", f"/servers/{self.server_id}/sites").get("sites", [])
@@ -104,21 +111,34 @@ class ForgeAPI:
         return self._request("POST", f"/servers/{self.server_id}/sites", data=data).get("site")
 
     def get_site(self, site_id: str) -> dict:
-        return self._request("GET", f"/servers/{self.server_id}/sites/{site_id}").get("site")
+        """Récupère un site, gère la réponse None de _request."""
+        # CORRECTION : Gérer le cas où _request retourne None (à cause d'un 404)
+        response = self._request("GET", f"/servers/{self.server_id}/sites/{site_id}")
+        return response.get("site") if response else None
     
     def wait_for_status(self, entity_type: str, entity_id: str, target_status: str = "installed", timeout: int = 300):
         """Sonde une ressource jusqu'à ce qu'elle atteigne le statut souhaité."""
         start_time = time.time()
         
         getter = None
+        # CORRECTION : Rendre les getters robustes au retour 'None' de _request
         if entity_type == "site":
             getter = lambda: self.get_site(entity_id)
         elif entity_type == "database":
-            getter = lambda: self._request("GET", f"/servers/{self.server_id}/databases/{entity_id}").get("database")
+            def get_db():
+                res = self._request("GET", f"/servers/{self.server_id}/databases/{entity_id}")
+                return res.get("database") if res else None
+            getter = get_db
         elif entity_type == "ssl":
-            getter = lambda: self._request("GET", f"/servers/{self.server_id}/sites/{self.site_id}/certificates/{entity_id}").get("certificate")
+            def get_ssl_cert():
+                res = self._request("GET", f"/servers/{self.server_id}/sites/{self.site_id}/certificates/{entity_id}")
+                return res.get("certificate") if res else None
+            getter = get_ssl_cert
         elif entity_type == "worker":
-             getter = lambda: self._request("GET", f"/servers/{self.server_id}/sites/{self.site_id}/workers/{entity_id}").get("worker")
+             def get_worker_status():
+                res = self._request("GET", f"/servers/{self.server_id}/sites/{self.site_id}/workers/{entity_id}")
+                return res.get("worker") if res else None
+             getter = get_worker_status
         else:
             raise ValueError(f"Unknown entity type: {entity_type}")
 
@@ -128,6 +148,7 @@ class ForgeAPI:
             
             resource = getter()
             if not resource:
+                # Cette condition est maintenant vraie si _request retourne None (404)
                 print(f"Warning: Could not fetch {entity_type} {entity_id}. Retrying...")
                 time.sleep(10)
                 continue
@@ -509,5 +530,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
