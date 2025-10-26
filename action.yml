@@ -1,0 +1,176 @@
+name: 'Laravel Forge Review App (Python)'
+description: 'Creates/Updates and deploys a review app on Laravel Forge using Python.'
+author: 'clemrep'
+
+branding:
+  icon: 'upload-cloud'
+  color: 'green'
+
+inputs:
+  forge_api_token:
+    description: 'Laravel Forge API key'
+    required: true
+  forge_server_id:
+    description: 'Laravel Forge server ID'
+    required: true
+  root_domain:
+    description: 'Root domain under which to create review-app site'
+    required: false
+  host:
+    description: 'Site host of the review-app'
+    required: false
+  prefix_with_pr_number:
+    description: 'Use the pull-request number as host and database prefix when host is not manually defined'
+    required: false
+    default: 'true'
+  fqdn_prefix:
+    description: 'Prefix the whole FQDN (e.g.: "app.")'
+    required: false
+  project_type:
+    description: 'Project type of the review-app'
+    required: false
+    default: 'php'
+  directory:
+    description: 'Root directory for nginx configuration of the review-app'
+    required: false
+    default: '/public'
+  isolated:
+    description: 'Isolate review-app site'
+    required: false
+    default: 'false'
+  php_version:
+    description: 'PHP version of the review-app site'
+    required: false
+    default: 'php81'
+  create_database:
+    description: 'Create database for review-app'
+    required: false
+    default: 'false'
+  database_user:
+    description: 'Database user of the review-app site'
+    required: false
+    default: 'forge'
+  database_password:
+    description: 'Database password of the review-app site'
+    required: false
+  database_name:
+    description: 'Database name of the review-app site'
+    required: false
+  database_name_prefix:
+    description: 'Database name prefix, useful for PostgreSQL that does not support digits (PR number) for first chars'
+    required: false
+  nginx_template:
+    description: 'Nginx template to use (default template if not defined)'
+    required: false
+  configure_repository:
+    description: 'Configure repository on review-app site'
+    required: false
+    default: 'true'
+  repository_provider:
+    description: 'Repository provider of review-app site'
+    required: false
+    default: 'github'
+  repository:
+    description: 'Repository of review-app site'
+    required: false
+  branch:
+    description: 'Git branch to use'
+    required: false
+  composer:
+    description: 'Composer install on repository setup'
+    required: false
+    default: 'false'
+  letsencrypt_certificate:
+    description: 'Obtain LetsEncrypt certificate for the review-app site'
+    required: false
+    default: 'true'
+  certificate_setup_timeout:
+    description: 'Maximum wait time in seconds for obtaining the certificate'
+    required: false
+    default: '120'
+  env_stub_path:
+    description: '.env stub file path inside git repository'
+    required: false
+    default: '.github/workflows/.env.stub'
+  deploy_script_stub_path:
+    description: 'Deploy script stub file path inside the git repository'
+    required: false
+    default: '.github/workflows/deploy-script.stub'
+  deployment_timeout:
+    description: 'Maximum wait time in seconds for deploying'
+    required: false
+    default: '900'
+  deployment_auto_source:
+    description: 'Whether to automatically source environment variables into the deployment script'
+    required: false
+    default: 'true'
+  create_worker:
+    description: 'Create site worker'
+    required: false
+    default: 'false'
+  worker_connection:
+    description: 'Worker connection (if creation is requested)'
+    required: false
+    default: 'redis'
+  worker_timeout:
+    description: 'Worker timeout in seconds (if creation is requested)'
+    required: false
+    default: '90'
+  worker_sleep:
+    description: 'Worker sleep in seconds (if creation is requested)'
+    required: false
+    default: '60'
+  worker_tries:
+    description: 'Worker maximum tries (if creation is requested)'
+    required: false
+  worker_processes:
+    description: 'Worker processes (if creation is requested)'
+    required: false
+    default: '1'
+  worker_stopwaitsecs:
+    description: 'Worker stop wait secs (if creation is requested)'
+    required: false
+    default: '600'
+  worker_php_version:
+    description: 'Worker PHP version (if creation is requested). `php_version` input value will be used if not defined'
+    required: false
+  worker_daemon:
+    description: 'Worker "daemon" (if creation is requested)'
+    required: false
+    default: 'true'
+  worker_force:
+    description: 'Worker "force" (if creation is requested)'
+    required: false
+    default: 'false'
+  worker_queue:
+    description: 'Worker queue (if creation is requested). Default queue will be used if not defined.'
+    required: false
+  horizon_enabled:
+    description: 'Enable Laravel Horizon integration'
+    required: false
+    default: 'false'
+  scheduler_enabled:
+    description: 'Enable Laravel Scheduler integration'
+    required: false
+    default: 'false'
+  quick_deploy_enabled:
+    description: 'Enable quick deployment trigger'
+    required: false
+    default: 'false'
+  aliases:
+    description: 'Comma-separated list of aliases to create based on the main host (e.g., "clientes, www")'
+    required: false
+
+outputs:
+  host:
+    description: 'Host of the review-app (generated or forced one in inputs)'
+  database_name:
+    description: 'Database name of the review-app (generated or forced one in inputs)'
+  site_id:
+    description: 'Forge site ID of the review-app'
+  worker_id:
+    description: 'Worker ID'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
