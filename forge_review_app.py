@@ -404,7 +404,7 @@ def main():
             site_data = {
                 "type": get_input("project_type"),  # Doit être un des types valides : laravel, symfony, etc.
                 "name": site_name,  # Sous-domaine uniquement (sans points)
-                "domain_mode": "subdomain",  # Obligatoire
+                "domain_mode": get_input("domain_mode", "custom"), 
                 "php_version": get_input("php_version"),
                 "is_isolated": is_isolated,
             }
