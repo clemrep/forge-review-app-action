@@ -70,11 +70,14 @@ class ForgeAPI:
         }
         self.site_id = None # Sera défini après la création/recherche
 
-    def _request(self, method: str, endpoint: str, data: dict = None, timeout: int = 30) -> dict:
+    def _request(self, method: str, endpoint: str, data: dict = None, timeout: int = 30, allow_404: bool = False) -> dict | None:
         """Méthode générique pour les requêtes API."""
         url = f"{self.BASE_URL}{endpoint}"
         try:
             response = requests.request(method, url, headers=self.headers, json=data if data else None, timeout=timeout)
+            
+            if allow_404 and response.status_code == 404:
+                return None
             
             response.raise_for_status() # Lève une exception pour les codes 4xx/5xx
             
@@ -83,6 +86,8 @@ class ForgeAPI:
             return response.json()
 
         except requests.exceptions.HTTPError as e:
+            if allow_404 and e.response.status_code == 404:
+                return None
             print(f"HTTP Error: {e.response.status_code} for {method} {url}")
             if e.response.text:
                 print(f"Response: {e.response.text}")
@@ -103,8 +108,11 @@ class ForgeAPI:
     def create_site(self, data: dict) -> dict:
         return self._request("POST", f"/servers/{self.server_id}/sites", data=data).get("site")
 
-    def get_site(self, site_id: str) -> dict:
-        return self._request("GET", f"/servers/{self.server_id}/sites/{site_id}").get("site")
+    def get_site(self, site_id: str, allow_404: bool = False) -> dict | None:
+        result = self._request("GET", f"/servers/{self.server_id}/sites/{site_id}", allow_404=allow_404)
+        if result is None:
+            return None
+        return result.get("site")
     
     def wait_for_status(self, entity_type: str, entity_id: str, target_status: str = "installed", timeout: int = 300):
         """Sonde une ressource jusqu'à ce qu'elle atteigne le statut souhaité."""
