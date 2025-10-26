@@ -12,7 +12,7 @@ def get_input(name: str, default: str = None) -> str:
     value = os.environ.get(f"INPUT_{name.upper()}", default)
     if value is None:
         # Gérer les inputs obligatoires qui seraient manquants
-        if name in ['forge_api_token', 'forge_server_id']:
+        if name in ['forge_api_token', 'forge_server_id', 'forge_organization']:
             print(f"Error: Required input '{name}' is missing.")
             sys.exit(1)
     return value
@@ -55,13 +55,16 @@ def db_slugify(text: str) -> str:
 class ForgeAPI:
     """Wrapper simple pour l'API Laravel Forge."""
     
-    BASE_URL = "https://forge.laravel.com/api/v1"
+    BASE_URL = "https://forge.laravel.com/api"
 
-    def __init__(self, token: str, server_id: str):
+    def __init__(self, token: str, organization: str, server_id: str):
         if not token:
             raise ValueError("Token API Forge est requis.")
+        if not organization:
+            raise ValueError("Organisation Forge est requise.")
         if not server_id:
             raise ValueError("ID du serveur Forge est requis.")
+        self.organization = organization
         self.server_id = server_id
         self.headers = {
             "Authorization": f"Bearer {token}",
@@ -98,23 +101,70 @@ class ForgeAPI:
             print(f"Request Error: {e}")
             sys.exit(1) # <--- Quitter pour les erreurs de connexion
 
+    def _extract_data(self, response: dict, key: str = None) -> any:
+        """Extrait les données d'une réponse JSON:API."""
+        if not response:
+            return None
+        
+        if key and key in response:
+            return response[key]
+        
+        # Structure JSON:API : data peut être un objet ou une liste
+        if "data" in response:
+            data = response["data"]
+            # Si data est une liste, retourner la liste
+            if isinstance(data, list):
+                return data
+            # Si data est un objet avec attributes, fusionner id et attributes
+            if isinstance(data, dict) and "attributes" in data:
+                # Fusionner l'ID avec les attributes
+                result = data["attributes"].copy()
+                if "id" in data:
+                    result["id"] = data["id"]
+                return result
+            # Sinon retourner data tel quel
+            return data
+        
+        return response
+
     def list_sites(self) -> list:
-        return self._request("GET", f"/servers/{self.server_id}/sites").get("sites", [])
+        response = self._request("GET", f"/orgs/{self.organization}/servers/{self.server_id}/sites")
+        if not response:
+            return []
+        data = self._extract_data(response)
+        # Si c'est une liste, retourner la liste
+        if isinstance(data, list):
+            # Extraire les attributes de chaque site dans la liste
+            sites = []
+            for item in data:
+                if isinstance(item, dict) and "attributes" in item:
+                    sites.append(item["attributes"])
+                else:
+                    sites.append(item)
+            return sites
+        return []
 
     def find_site_by_name(self, name: str) -> dict | None:
         for site in self.list_sites():
-            if site.get("name") == name:
+            # Les sites peuvent avoir un champ "name" ou "domain"
+            if site.get("name") == name or site.get("domain") == name:
                 return site
         return None
 
     def create_site(self, data: dict) -> dict:
-        return self._request("POST", f"/servers/{self.server_id}/sites", data=data).get("site")
+        response = self._request("POST", f"/orgs/{self.organization}/servers/{self.server_id}/sites", data=data)
+        if not response:
+            return None
+        data_extracted = self._extract_data(response)
+        return data_extracted
 
     def get_site(self, site_id: str) -> dict:
         """Récupère un site, gère la réponse None de _request."""
         # CORRECTION : Gérer le cas où _request retourne None (à cause d'un 404)
-        response = self._request("GET", f"/servers/{self.server_id}/sites/{site_id}")
-        return response.get("site") if response else None
+        response = self._request("GET", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{site_id}")
+        if not response:
+            return None
+        return self._extract_data(response)
     
     def wait_for_status(self, entity_type: str, entity_id: str, target_status: str = "installed", timeout: int = 300):
         """Sonde une ressource jusqu'à ce qu'elle atteigne le statut souhaité."""
@@ -126,18 +176,18 @@ class ForgeAPI:
             getter = lambda: self.get_site(entity_id)
         elif entity_type == "database":
             def get_db():
-                res = self._request("GET", f"/servers/{self.server_id}/databases/{entity_id}")
-                return res.get("database") if res else None
+                res = self._request("GET", f"/orgs/{self.organization}/servers/{self.server_id}/databases/{entity_id}")
+                return self._extract_data(res) if res else None
             getter = get_db
         elif entity_type == "ssl":
             def get_ssl_cert():
-                res = self._request("GET", f"/servers/{self.server_id}/sites/{self.site_id}/certificates/{entity_id}")
-                return res.get("certificate") if res else None
+                res = self._request("GET", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{self.site_id}/certificates/{entity_id}")
+                return self._extract_data(res) if res else None
             getter = get_ssl_cert
         elif entity_type == "worker":
              def get_worker_status():
-                res = self._request("GET", f"/servers/{self.server_id}/sites/{self.site_id}/workers/{entity_id}")
-                return res.get("worker") if res else None
+                res = self._request("GET", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{self.site_id}/workers/{entity_id}")
+                return self._extract_data(res) if res else None
              getter = get_worker_status
         else:
             raise ValueError(f"Unknown entity type: {entity_type}")
@@ -166,35 +216,43 @@ class ForgeAPI:
             time.sleep(10) # Poll every 10 seconds
 
     def find_database_by_name(self, name: str) -> dict | None:
-        dbs = self._request("GET", f"/servers/{self.server_id}/databases").get("databases", [])
+        response = self._request("GET", f"/orgs/{self.organization}/servers/{self.server_id}/databases")
+        if not response:
+            return []
+        dbs_data = self._extract_data(response)
+        dbs = dbs_data if isinstance(dbs_data, list) else []
         for db in dbs:
-            if db.get("name") == name:
-                return db
+            # Extraire les attributes si nécessaire
+            db_attrs = db.get("attributes", db) if isinstance(db, dict) else db
+            if db_attrs.get("name") == name:
+                return db_attrs
         return None
     
     def create_database(self, name: str, user: str) -> dict:
         data = {"name": name, "user": user}
         # Nous supposons que l'utilisateur 'forge' (ou 'database_user' fourni) existe.
-        return self._request("POST", f"/servers/{self.server_id}/databases", data=data).get("database")
+        response = self._request("POST", f"/orgs/{self.organization}/servers/{self.server_id}/databases", data=data)
+        return self._extract_data(response) if response else None
 
     def install_repository(self, site_id: str, data: dict) -> dict:
-        return self._request("POST", f"/servers/{self.server_id}/sites/{site_id}/repository", data=data)
+        return self._request("POST", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{site_id}/repository", data=data)
 
     def update_env_file(self, site_id: str, content: str):
-        return self._request("POST", f"/servers/{self.server_id}/sites/{site_id}/env", data={"content": content})
+        return self._request("PUT", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{site_id}/env", data={"content": content})
 
     def update_deploy_script(self, site_id: str, content: str):
-        return self._request("PUT", f"/servers/{self.server_id}/sites/{site_id}/deployment-script", data={"content": content})
+        return self._request("PUT", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{site_id}/deployment-script", data={"content": content})
     
     def get_ssl(self, site_id: str, domains: list) -> dict:
-        return self._request("POST", f"/servers/{self.server_id}/sites/{site_id}/certificates/letsencrypt", data={"domains": domains}).get("certificate")
+        response = self._request("POST", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{site_id}/certificates/letsencrypt", data={"domains": domains})
+        return self._extract_data(response) if response else None
 
     def enable_quick_deploy(self, site_id: str, auto_source: bool):
         data = {"auto_source": auto_source}
-        return self._request("POST", f"/servers/{self.server_id}/sites/{site_id}/deployment", data=data)
+        return self._request("POST", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{site_id}/deployment", data=data)
 
     def enable_horizon(self, site_id: str):
-        return self._request("POST", f"/servers/{self.server_id}/sites/{site_id}/horizon", data={})
+        return self._request("POST", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{site_id}/horizon", data={})
 
     def enable_scheduler(self, site_id: str, user: str, site_name: str):
         print("Scheduler enabling... Creating scheduled job for 'artisan schedule:run'")
@@ -202,11 +260,14 @@ class ForgeAPI:
         command = f"php /home/{user}/{site_name}/current/artisan schedule:run"
         
         # Vérifier si le job existe déjà
-        jobs = self._request("GET", f"/servers/{self.server_id}/jobs").get("jobs", [])
+        response = self._request("GET", f"/orgs/{self.organization}/servers/{self.server_id}/jobs")
+        jobs_data = self._extract_data(response) if response else []
+        jobs = jobs_data if isinstance(jobs_data, list) else []
         for job in jobs:
-            if job.get("command") == command and job.get("user") == user:
-                print(f"Scheduler job (ID: {job['id']}) already exists.")
-                return job
+            job_attrs = job.get("attributes", job) if isinstance(job, dict) else job
+            if job_attrs.get("command") == command and job_attrs.get("user") == user:
+                print(f"Scheduler job (ID: {job_attrs.get('id')}) already exists.")
+                return job_attrs
 
         print(f"Creating scheduler job with command: {command}")
         data = {
@@ -214,15 +275,16 @@ class ForgeAPI:
             "frequency": "minutely",
             "user": user
         }
-        return self._request("POST", f"/servers/{self.server_id}/jobs", data=data)
+        return self._request("POST", f"/orgs/{self.organization}/servers/{self.server_id}/jobs", data=data)
 
     def create_worker(self, site_id: str, data: dict) -> dict:
-        return self._request("POST", f"/servers/{self.server_id}/sites/{site_id}/workers", data=data).get("worker")
+        response = self._request("POST", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{site_id}/workers", data=data)
+        return self._extract_data(response) if response else None
 
     def deploy_site(self, site_id: str, timeout: int):
         print(f"Triggering deployment for site {site_id} (timeout: {timeout}s)...")
         # Le paramètre 'wait: true' fait que l'API attend la fin du déploiement
-        return self._request("POST", f"/servers/{self.server_id}/sites/{site_id}/deployment/deploy", data={"wait": True}, timeout=timeout)
+        return self._request("POST", f"/orgs/{self.organization}/servers/{self.server_id}/sites/{site_id}/deployment/deploy", data={"wait": True}, timeout=timeout)
 
 # --- Logique principale ---
 
@@ -304,37 +366,44 @@ def main():
         print(f"Database name determined: {database_name}")
         
         # --- 3. Initialiser l'API ---
-        api = ForgeAPI(token, server_id)
+        organization = get_input("forge_organization")
+        api = ForgeAPI(token, organization, server_id)
         
         # --- 4. Trouver ou Créer le Site ---
         site = api.find_site_by_name(host)
         is_isolated = to_bool(get_input("isolated"))
         
         if site:
-            site_id = site['id']
+            site_id = site.get('id') or site.get('attributes', {}).get('id')
             api.site_id = site_id
             print(f"Site '{host}' (ID: {site_id}) found. Checking status...")
             site = api.wait_for_status("site", site_id)
         else:
             print(f"Site '{host}' not found. Creating...")
             site_data = {
-                "domain": host,
-                "project_type": get_input("project_type"),
-                "directory": get_input("directory"),
-                "isolated": is_isolated,
+                "type": get_input("project_type"),  # Doit être un des types valides : laravel, symfony, etc.
+                "name": host,
                 "php_version": get_input("php_version"),
+                "is_isolated": is_isolated,
             }
+            
+            # Ajouter web_directory si spécifié
+            web_dir = get_input("directory")
+            if web_dir:
+                site_data["web_directory"] = web_dir
+            
+            # Ajouter nginx_template_id si spécifié
             if get_input("nginx_template"):
-                site_data["nginx_template"] = int(get_input("nginx_template"))
+                site_data["nginx_template_id"] = int(get_input("nginx_template"))
             
             new_site = api.create_site(site_data)
-            site_id = new_site['id']
+            site_id = new_site.get('id') or new_site.get('attributes', {}).get('id')
             api.site_id = site_id
             print(f"Site created (ID: {site_id}). Waiting for installation...")
             site = api.wait_for_status("site", site_id)
 
         # Déterminer l'utilisateur du site
-        site_user = site.get("username", "forge")
+        site_user = site.get("user", "forge")
         
         # --- 5. Trouver ou Créer la Base de Données ---
         db_pass = get_input("database_password")
@@ -350,8 +419,9 @@ def main():
             else:
                 print(f"Database '{database_name}' not found. Creating and linking to user '{db_user}'...")
                 new_db = api.create_database(database_name, db_user)
-                print(f"Database created (ID: {new_db['id']}). Waiting for installation...")
-                api.wait_for_status("database", new_db['id'])
+                db_id = new_db.get('id') or new_db.get('attributes', {}).get('id')
+                print(f"Database created (ID: {db_id}). Waiting for installation...")
+                api.wait_for_status("database", db_id)
 
         # --- 6. Configurer le Dépôt ---
         if to_bool(get_input("configure_repository")):
@@ -363,14 +433,18 @@ def main():
             }
             
             needs_repo_install = False
-            if site.get("repository_status") != "installed":
+            repo_info = site.get("repository", {})
+            if not isinstance(repo_info, dict):
+                repo_info = {}
+            
+            if repo_info.get("status") != "installed":
                 print("Repository not installed. Configuring...")
                 needs_repo_install = True
-            elif site.get("repository_branch") != branch:
-                print(f"Branch mismatch. Site is on '{site.get('repository_branch')}', changing to '{branch}'.")
+            elif repo_info.get("branch") != branch:
+                print(f"Branch mismatch. Site is on '{repo_info.get('branch')}', changing to '{branch}'.")
                 needs_repo_install = True
-            elif site.get("repository") != repo_name:
-                 print(f"Repository mismatch. Site is on '{site.get('repository')}', changing to '{repo_name}'.")
+            elif repo_info.get("url") != repo_name:
+                 print(f"Repository mismatch. Site is on '{repo_info.get('url')}', changing to '{repo_name}'.")
                  needs_repo_install = True
 
             if needs_repo_install:
@@ -432,22 +506,28 @@ def main():
                         all_domains.append(f"{alias}-{host}")
             
             needs_ssl_update = False
-            if not site.get("is_secured"):
+            if not site.get("https"):
                 print("Site is not secured. Requesting SSL.")
                 needs_ssl_update = True
             else:
                 # Le site est sécurisé, vérifier si les domaines correspondent
                 print("Site is secured. Checking domains...")
-                existing_certs = api._request("GET", f"/servers/{server_id}/sites/{site_id}/certificates").get("certificates", [])
+                certs_response = api._request("GET", f"/orgs/{api.organization}/servers/{server_id}/sites/{site_id}/certificates")
+                existing_certs = []
+                if certs_response:
+                    certs_data = api._extract_data(certs_response)
+                    existing_certs = certs_data if isinstance(certs_data, list) else []
                 active_cert_domains = []
                 if existing_certs:
                     # Trouver le certificat actif (ou le premier)
                     for cert in existing_certs:
-                        if cert.get("status") == "installed":
-                            active_cert_domains = cert.get("domains", [])
+                        cert_attrs = cert.get("attributes", cert) if isinstance(cert, dict) else cert
+                        if cert_attrs.get("status") == "installed":
+                            active_cert_domains = cert_attrs.get("domains", [])
                             break
                     if not active_cert_domains and existing_certs:
-                         active_cert_domains = existing_certs[0].get("domains", [])
+                         first_cert_attrs = existing_certs[0].get("attributes", existing_certs[0]) if isinstance(existing_certs[0], dict) else existing_certs[0]
+                         active_cert_domains = first_cert_attrs.get("domains", [])
                 
                 if set(active_cert_domains) != set(all_domains):
                     print(f"SSL domains mismatch. Requesting update.")
@@ -460,9 +540,10 @@ def main():
             if needs_ssl_update:
                 print(f"Requesting certificate for domains: {all_domains}")
                 cert_req = api.get_ssl(site_id, all_domains)
-                print(f"Waiting for certificate (ID: {cert_req['id']}) to install...")
+                cert_id = cert_req.get('id') or cert_req.get('attributes', {}).get('id')
+                print(f"Waiting for certificate (ID: {cert_id}) to install...")
                 ssl_timeout = int(get_input("certificate_setup_timeout", 120))
-                api.wait_for_status("ssl", cert_req['id'], timeout=ssl_timeout)
+                api.wait_for_status("ssl", cert_id, timeout=ssl_timeout)
             else:
                 print("SSL already configured and domains match.")
         else:
@@ -488,22 +569,28 @@ def main():
                  worker_data["queue"] = get_input("worker_queue")
 
             # Vérifier si un worker similaire existe déjà
-            existing_workers = api._request("GET", f"/servers/{server_id}/sites/{site_id}/workers").get("workers", [])
+            workers_response = api._request("GET", f"/orgs/{api.organization}/servers/{server_id}/sites/{site_id}/workers")
+            existing_workers = []
+            if workers_response:
+                workers_data = api._extract_data(workers_response)
+                existing_workers = workers_data if isinstance(workers_data, list) else []
             found_worker = None
             for w in existing_workers:
+                # Extraire les attributes si nécessaire
+                w_attrs = w.get("attributes", w) if isinstance(w, dict) else w
                 # Simple vérification (peut être affinée)
-                if (w.get("connection") == worker_data["connection"] and 
-                    w.get("queue") == worker_data.get("queue") and
-                    w.get("status") == "installed"):
-                    print(f"Worker (ID: {w['id']}) already exists. Skipping creation.")
-                    found_worker = w
-                    worker_id = w['id']
+                if (w_attrs.get("connection") == worker_data["connection"] and 
+                    w_attrs.get("queue") == worker_data.get("queue") and
+                    w_attrs.get("status") == "installed"):
+                    print(f"Worker (ID: {w_attrs.get('id')}) already exists. Skipping creation.")
+                    found_worker = w_attrs
+                    worker_id = w_attrs.get('id')
                     break
             
             if not found_worker:
                 print("Creating new worker...")
                 new_worker = api.create_worker(site_id, worker_data)
-                worker_id = new_worker['id']
+                worker_id = new_worker.get('id') or new_worker.get('attributes', {}).get('id')
                 print(f"Worker created (ID: {worker_id}). Waiting for installation...")
                 api.wait_for_status("worker", worker_id)
         
